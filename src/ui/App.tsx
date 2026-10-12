@@ -33,18 +33,16 @@ interface PlaneState {
   offset: number;
   flip: boolean;
   axis: Axis | null;
-  /** True once the user has interacted with a plane control; the cut only
-   *  renders after that, matching the boot behavior of the volume. */
-  on: boolean;
 }
 
+/** Cut faces the time axis so it slices frames, parked a few frames into the
+ *  stack (offset is refined once the volume extent is known). */
 const INITIAL_PLANE: PlaneState = {
   azimuth: 0,
-  elevation: 0,
+  elevation: 90,
   offset: 0,
   flip: false,
-  axis: null,
-  on: false,
+  axis: 'z',
 };
 
 function planeNormal(azimuth: number, elevation: number): Vec3 {
@@ -132,6 +130,9 @@ export function App() {
   const cubeRef = useRef<CubeRenderer | null>(null);
   const resliceRef = useRef<ResliceRenderer | null>(null);
   const lastFileRef = useRef<File | null>(null);
+  // False until the user moves a plane control; before that the cut keeps
+  // its default parked position as dims/spacing change.
+  const planeTouchedRef = useRef(false);
 
   const [dims, setDims] = useState<Vec3>([64, 64, 64]);
   const [hasVideo, setHasVideo] = useState(false);
@@ -172,12 +173,21 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [webgl2Supported]);
 
-  // Derived plane drives both renderers. The cut only engages (on) after
-  // the user interacts with a plane control; boot and fresh ingests stay whole.
+  // Derived plane drives both renderers. The cut is always on; before the
+  // user touches a plane control it stays parked near the start of the stack.
   useEffect(() => {
-    cubeRef.current?.setPlane(normal, clampedOffset, plane.on, plane.flip);
+    cubeRef.current?.setPlane(normal, clampedOffset, true, plane.flip);
     resliceRef.current?.setPlane(normal, clampedOffset);
-  }, [normal, clampedOffset, plane.on, plane.flip]);
+  }, [normal, clampedOffset, plane.flip]);
+
+  // Park the cut three frames into the stack so the section is visible from
+  // boot; once the user moves a plane control, their offset stands.
+  useEffect(() => {
+    if (planeTouchedRef.current) return;
+    const pitch = (2 * half[2]) / dims[2];
+    const d = -half[2] + 3 * pitch;
+    setPlaneState((p) => (p.offset === d ? p : { ...p, offset: d }));
+  }, [half, dims]);
 
   // Reconcile offset state when reach shrinks (spacing/dims change), so the
   // stored offset and the slider cannot sit beyond the volume.
@@ -192,9 +202,9 @@ export function App() {
   useEffect(() => {
     cubeRef.current?.setSpacing(half);
     resliceRef.current?.setSpacing(half);
-    cubeRef.current?.setPlane(normal, clampedOffset, plane.on, plane.flip);
+    cubeRef.current?.setPlane(normal, clampedOffset, true, plane.flip);
     resliceRef.current?.setPlane(normal, clampedOffset);
-  }, [half, normal, clampedOffset, plane.on, plane.flip]);
+  }, [half, normal, clampedOffset, plane.flip]);
 
   const ingest = useCallback(
     async (file: File) => {
@@ -214,7 +224,7 @@ export function App() {
           const cube = new CubeRenderer(cubeCanvas, r.data, nextDims);
           cube.setDensity(opacity);
           cube.setSpacing(nextHalf);
-          cube.setPlane(n, clampedOffset, plane.on, plane.flip);
+          cube.setPlane(n, clampedOffset, true, plane.flip);
           cube.start();
           cubeRef.current = cube;
         }
@@ -235,7 +245,7 @@ export function App() {
         setIngesting(false);
       }
     },
-    [rate, spacing, opacity, plane.azimuth, plane.elevation, clampedOffset, plane.on, plane.flip],
+    [rate, spacing, opacity, plane.azimuth, plane.elevation, clampedOffset, plane.flip],
   );
 
   const ingestFile = useCallback(
@@ -284,9 +294,11 @@ export function App() {
     cubeRef.current?.setDensity(v);
   }, []);
 
-  // Every plane-control interaction engages the cut, as before.
+  // A plane-control interaction hands the offset over to the user: the
+  // parked default no longer follows dims/spacing changes.
   const updatePlane = useCallback((partial: Partial<PlaneState>) => {
-    setPlaneState((p) => ({ ...p, ...partial, on: true }));
+    planeTouchedRef.current = true;
+    setPlaneState((p) => ({ ...p, ...partial }));
   }, []);
 
   const setAxis = useCallback(
