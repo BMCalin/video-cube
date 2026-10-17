@@ -1,0 +1,14 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "video-cube",
+	"compatibility_date": "2026-10-17",
+	"assets": {
+		"directory": "./dist"
+	},
+	"build": {
+		"command": "npm run build"
+	},
+	"observability": {
+		"enabled": true
+	}
+}
