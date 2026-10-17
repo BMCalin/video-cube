@@ -19,6 +19,8 @@ uniform vec3 uPlaneNormal;
 uniform float uPlaneOffset;
 uniform bool uPlaneOn;
 uniform bool uPlaneFlip;
+uniform bool uPlaneClip;
+uniform float uPlaneImgAlpha;
 out vec4 outColor;
 
 bool rayBox(vec3 ro, vec3 rd, out float t0, out float t1) {
@@ -32,13 +34,26 @@ bool rayBox(vec3 ro, vec3 rd, out float t0, out float t1) {
   return t1 > max(t0, 0.0);
 }
 
+// Composite the cut-plane image into the front-to-back accumulation at its
+// true depth along the ray, so cube sheets in front occlude it and it dims
+// the sheets behind.
+void applyPlane(vec3 ro, vec3 rd, float tc, inout vec3 acc, inout float accA) {
+  if (tc < 0.0) return;
+  vec3 p = ro + rd * tc;
+  vec3 uvw = vec3(p.x / (2.0 * uHalf.x) + 0.5, 0.5 - p.y / (2.0 * uHalf.y), p.z / (2.0 * uHalf.z) + 0.5);
+  if (any(lessThan(uvw, vec3(0.0))) || any(greaterThan(uvw, vec3(1.0)))) return;
+  float ap = uPlaneImgAlpha;
+  acc += (1.0 - accA) * ap * texture(uVolume, uvw).rgb;
+  accA += (1.0 - accA) * ap;
+}
+
 void main() {
   vec3 ro = cameraPosition;
   vec3 rd = normalize(vWorld - ro);
   float t0, t1;
   if (!rayBox(ro, rd, t0, t1)) discard;
   t0 = max(t0, 0.0);
-  if (uPlaneOn) {
+  if (uPlaneOn && uPlaneClip) {
     // section cut: keep { dot(p, n) >= d }, or the other side when flipped
     bool keepPos = !uPlaneFlip;
     float dn = dot(rd, uPlaneNormal);
@@ -53,11 +68,20 @@ void main() {
     }
   }
   if (t1 <= t0) discard;
+  // Cut-plane image crossing; -1 when the ray misses it. When the cube is
+  // clipped the crossing sits exactly on the clipped interval edge, so the
+  // face still shows at full strength.
+  float tc = -1.0;
+  if (uPlaneOn && abs(dot(rd, uPlaneNormal)) > 1e-6) {
+    float t = -(dot(ro, uPlaneNormal) - uPlaneOffset) / dot(rd, uPlaneNormal);
+    if (t >= t0 && t <= t1) tc = t;
+  }
   // March sheet by sheet: each frame is a thin slab around its z center.
   float pitch = 2.0 * uHalf.z / uFrames;
   float ht = 0.5 * min(uSliceThick, pitch); // sheet half-thickness (never overlaps neighbor)
   vec3 acc = vec3(0.0);
   float accA = 0.0;
+  bool planeDone = tc < 0.0;
   for (int i = 0; i < 192; i++) {
     if (i >= int(uFrames)) break;
     // march in ray order (near -> far) so the nearest sheet composites last-in-weight
@@ -68,6 +92,11 @@ void main() {
     float s0 = max(min(ta, tb), t0);
     float s1 = min(max(ta, tb), t1);
     if (s1 <= s0) continue;
+    if (!planeDone && tc <= s1) {
+      // plane at or in front of this sheet's far edge: it comes first
+      applyPlane(ro, rd, tc, acc, accA);
+      planeDone = true;
+    }
     // uDensity = per-sheet opacity; thin chords (grazing clip) scale proportionally
     float sa = uDensity * clamp((s1 - s0) / uSliceThick, 0.0, 1.0);
     vec3 p = ro + rd * (0.5 * (s0 + s1));
@@ -77,40 +106,8 @@ void main() {
     accA += (1.0 - accA) * sa;
     if (accA > 0.99) break;
   }
+  if (!planeDone) applyPlane(ro, rd, tc, acc, accA);
   if (accA < 0.004) discard;
   outColor = vec4(acc, accA);
-}
-`;
-
-export const RESLICE_VERT = /* glsl */ `
-out vec2 vUv;
-void main() {
-  vUv = uv;
-  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-}
-`;
-
-export const RESLICE_FRAG = /* glsl */ `
-precision highp float;
-precision highp sampler3D;
-in vec2 vUv;
-uniform sampler3D uVolume;
-uniform vec3 uNormal;
-uniform vec3 uU;
-uniform vec3 uV;
-uniform vec3 uHalf;
-uniform float uOffset;
-uniform float uExtent;
-out vec4 outColor;
-void main() {
-  vec3 p = uNormal * uOffset
-         + uU * ((vUv.x - 0.5) * uExtent)
-         + uV * ((vUv.y - 0.5) * uExtent);
-  vec3 uvw = vec3(p.x / (2.0 * uHalf.x) + 0.5, 0.5 - p.y / (2.0 * uHalf.y), p.z / (2.0 * uHalf.z) + 0.5);
-  if (any(lessThan(uvw, vec3(0.0))) || any(greaterThan(uvw, vec3(1.0)))) {
-    outColor = vec4(0.0);
-    return;
-  }
-  outColor = vec4(texture(uVolume, uvw).rgb, 1.0);
 }
 `;

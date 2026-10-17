@@ -44,6 +44,8 @@ export class CubeRenderer {
       uPlaneOffset: { value: 0 },
       uPlaneOn: { value: false },
       uPlaneFlip: { value: false },
+      uPlaneClip: { value: true },
+      uPlaneImgAlpha: { value: 1 },
     };
     const mat = new THREE.ShaderMaterial({
       glslVersion: THREE.GLSL3,
@@ -70,6 +72,7 @@ export class CubeRenderer {
     geo.setAttribute('position', this.linePositions);
     this.line = new THREE.Line(geo, new THREE.LineBasicMaterial({ color: 0x55ffcc }));
     this.line.visible = false;
+    this.line.renderOrder = 2; // keep the outline over the cube pass
     this.scene.add(this.line);
 
     this.resize();
@@ -78,6 +81,16 @@ export class CubeRenderer {
   /** Slider value (0.5-100) maps to per-sheet opacity fraction. */
   setDensity(v: number): void {
     this.uniforms.uDensity.value = v / 100;
+  }
+
+  /** Slider value (0-100) maps to cut-plane image opacity. */
+  setPlaneImageAlpha(v: number): void {
+    this.uniforms.uPlaneImgAlpha.value = v / 100;
+  }
+
+  /** When true the cut side of the cube is hidden; false keeps the full cube. */
+  setClipCube(clip: boolean): void {
+    this.uniforms.uPlaneClip.value = clip;
   }
 
   /** Reshape the volume box (video aspect + time-axis spacing). */

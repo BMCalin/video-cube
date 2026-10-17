@@ -19,7 +19,6 @@ import { Progress } from '@/components/ui/progress';
 import { Slider } from '@/components/ui/slider';
 import { cn } from '@/lib/utils';
 import { CubeRenderer } from '@/render/cubeRenderer';
-import { ResliceRenderer } from '@/render/resliceRenderer';
 import { ingestVideo } from '@/ingest/ingestVideo';
 import { volumeHalfExtents } from '@/render/resliceMath';
 import type { Vec3 } from '@/render/linalg';
@@ -126,22 +125,21 @@ export function App() {
   );
 
   const cubeCanvasRef = useRef<HTMLCanvasElement>(null);
-  const resliceCanvasRef = useRef<HTMLCanvasElement>(null);
   const cubeRef = useRef<CubeRenderer | null>(null);
-  const resliceRef = useRef<ResliceRenderer | null>(null);
   const lastFileRef = useRef<File | null>(null);
   // False until the user moves a plane control; before that the cut keeps
   // its default parked position as dims/spacing change.
   const planeTouchedRef = useRef(false);
 
   const [dims, setDims] = useState<Vec3>([64, 64, 64]);
-  const [hasVideo, setHasVideo] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [ingesting, setIngesting] = useState(false);
   const [progress, setProgress] = useState(0);
   const [rate, setRate] = useState(10);
   const [rateDirty, setRateDirty] = useState(false);
   const [opacity, setOpacity] = useState(8);
+  const [planeImg, setPlaneImg] = useState(100);
+  const [showClipped, setShowClipped] = useState(false);
   const [spacing, setSpacing] = useState(1);
   const [dragOver, setDragOver] = useState(false);
   const [plane, setPlaneState] = useState<PlaneState>(INITIAL_PLANE);
@@ -173,11 +171,10 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [webgl2Supported]);
 
-  // Derived plane drives both renderers. The cut is always on; before the
+  // Derived plane drives the renderer. The cut is always on; before the
   // user touches a plane control it stays parked near the start of the stack.
   useEffect(() => {
     cubeRef.current?.setPlane(normal, clampedOffset, true, plane.flip);
-    resliceRef.current?.setPlane(normal, clampedOffset);
   }, [normal, clampedOffset, plane.flip]);
 
   // Park the cut three frames into the stack so the section is visible from
@@ -198,12 +195,10 @@ export function App() {
     });
   }, [reach]);
 
-  // Spacing/dims change both renderers and re-apply the current plane.
+  // Spacing/dims change the volume box and re-apply the current plane.
   useEffect(() => {
     cubeRef.current?.setSpacing(half);
-    resliceRef.current?.setSpacing(half);
     cubeRef.current?.setPlane(normal, clampedOffset, true, plane.flip);
-    resliceRef.current?.setPlane(normal, clampedOffset);
   }, [half, normal, clampedOffset, plane.flip]);
 
   const ingest = useCallback(
@@ -211,7 +206,7 @@ export function App() {
       setIngesting(true);
       setProgress(0);
       try {
-        const r = await ingestVideo(file, rate, 256, (done, total) =>
+        const r = await ingestVideo(file, rate, 512, (done, total) =>
           setProgress(Math.round((done / total) * 100)),
         );
         const nextDims: Vec3 = [r.width, r.height, r.depth];
@@ -223,29 +218,21 @@ export function App() {
         if (cubeCanvas) {
           const cube = new CubeRenderer(cubeCanvas, r.data, nextDims);
           cube.setDensity(opacity);
+          cube.setPlaneImageAlpha(planeImg);
+          cube.setClipCube(!showClipped);
           cube.setSpacing(nextHalf);
           cube.setPlane(n, clampedOffset, true, plane.flip);
           cube.start();
           cubeRef.current = cube;
         }
         setDims(nextDims);
-        setHasVideo(true);
-
-        resliceRef.current?.dispose();
-        const resliceCanvas = resliceCanvasRef.current;
-        if (resliceCanvas) {
-          const reslice = new ResliceRenderer(resliceCanvas, r.data, nextDims);
-          reslice.setSpacing(nextHalf);
-          reslice.setPlane(n, clampedOffset);
-          resliceRef.current = reslice;
-        }
       } catch (e) {
         setError(e instanceof Error ? e.message : 'Ingest failed.');
       } finally {
         setIngesting(false);
       }
     },
-    [rate, spacing, opacity, plane.azimuth, plane.elevation, clampedOffset, plane.flip],
+    [rate, spacing, opacity, planeImg, showClipped, plane.azimuth, plane.elevation, clampedOffset, plane.flip],
   );
 
   const ingestFile = useCallback(
@@ -292,6 +279,16 @@ export function App() {
   const handleOpacity = useCallback((v: number) => {
     setOpacity(v);
     cubeRef.current?.setDensity(v);
+  }, []);
+
+  const handlePlaneImg = useCallback((v: number) => {
+    setPlaneImg(v);
+    cubeRef.current?.setPlaneImageAlpha(v);
+  }, []);
+
+  const handleShowClipped = useCallback((show: boolean) => {
+    setShowClipped(show);
+    cubeRef.current?.setClipCube(!show);
   }, []);
 
   // A plane-control interaction hands the offset over to the user: the
@@ -408,13 +405,23 @@ export function App() {
             <SidebarGroupContent className="flex flex-col gap-3">
               <SliderRow
                 id="opacity"
-                label="Opacity"
+                label="Cube opacity"
                 unit=""
                 min={0.5}
                 max={100}
                 step={0.5}
                 value={opacity}
                 onValueChange={handleOpacity}
+              />
+              <SliderRow
+                id="plane-img"
+                label="Plane image opacity"
+                unit=""
+                min={0}
+                max={100}
+                step={1}
+                value={planeImg}
+                onValueChange={handlePlaneImg}
               />
               <SliderRow
                 id="spacing"
@@ -486,30 +493,16 @@ export function App() {
                   Flip cut side
                 </Label>
               </div>
-            </SidebarGroupContent>
-          </SidebarGroup>
-
-          <SidebarGroup>
-            <SidebarGroupLabel>Reslice</SidebarGroupLabel>
-            <SidebarGroupContent className="flex flex-col gap-2">
-              <canvas
-                id="reslice"
-                width={320}
-                height={320}
-                hidden={!hasVideo}
-                ref={resliceCanvasRef}
-                className="w-full max-w-80 rounded-md border"
-              />
-              {hasVideo && (
-                <Button
-                  id="download"
-                  size="sm"
-                  variant="outline"
-                  onClick={() => resliceRef.current?.exportPng('reslice.png')}
-                >
-                  Download reslice PNG
-                </Button>
-              )}
+              <div className="flex items-center gap-2">
+                <Checkbox
+                  id="show-clipped"
+                  checked={showClipped}
+                  onCheckedChange={(c) => handleShowClipped(c === true)}
+                />
+                <Label htmlFor="show-clipped" className="text-xs">
+                  Show clipped side
+                </Label>
+              </div>
             </SidebarGroupContent>
           </SidebarGroup>
         </SidebarContent>
