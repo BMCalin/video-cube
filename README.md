@@ -22,3 +22,9 @@ inspect from any angle:
   sheared view.
 - **Export** — download the reslice panel as a PNG.
 
+## Credits
+
+Video Cube by Zane Chen. Viewer resolution, the tilt pivot, the colour key
+and the time-slice maths are adapted from [@BMCalin](https://github.com/BMCalin)'s
+[time-slice export proposal](https://github.com/czl9707/video-cube/pull/2).
+
