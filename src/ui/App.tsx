@@ -1,5 +1,6 @@
+import { X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { ChangeEvent, DragEvent } from 'react';
+import type { ChangeEvent, DragEvent, MouseEvent as ReactMouseEvent } from 'react';
 import {
   Sidebar,
   SidebarContent,
@@ -22,6 +23,9 @@ import { CubeRenderer } from '@/render/cubeRenderer';
 import { ingestVideo } from '@/ingest/ingestVideo';
 import { volumeHalfExtents } from '@/render/resliceMath';
 import { offsetAboutPivot, pivotSegment3D } from '@/render/tiltPivot';
+import { DEFAULT_COLOR_KEY } from '@/render/colorKey';
+import type { ColorKey } from '@/render/colorKey';
+import { ColorKeyPanel } from './ColorKeyPanel';
 import type { Vec3 } from '@/render/linalg';
 import { syntheticVolume } from './syntheticVolume';
 
@@ -154,6 +158,13 @@ export function App() {
   const [pivot, setPivot] = useState(0.5);
   // Bumped on every ingest so plane-overlay effects re-run for the new renderer.
   const [volumeEpoch, setVolumeEpoch] = useState(0);
+  // One tool panel at a time on the right.
+  const [rightPanel, setRightPanel] = useState<'none' | 'key'>('none');
+  const [colorKey, setColorKey] = useState<ColorKey>(DEFAULT_COLOR_KEY);
+  // True while the eyedropper waits for a click on the cut face.
+  const [picking, setPicking] = useState(false);
+  // Green cut-face outline and orange pivot line; hide them for a clean view.
+  const [showGuides, setShowGuides] = useState(true);
   const [opacity, setOpacity] = useState(8);
   const [planeImg, setPlaneImg] = useState(100);
   const [showClipped, setShowClipped] = useState(false);
@@ -218,6 +229,34 @@ export function App() {
     // Drawn 1.5% inside the frame so it stays distinguishable from the outline at 0% / 100%.
     cubeRef.current?.setPivotLine(pivotSegment3D(plane3, half, 0.015 + pivot * 0.97));
   }, [plane.azimuth, plane.elevation, clampedOffset, half, pivot, volumeEpoch]);
+
+  // Guides visibility and the colour key; re-applied when a new volume (and renderer) is created.
+  useEffect(() => {
+    cubeRef.current?.setGuidesVisible(showGuides);
+  }, [showGuides, volumeEpoch]);
+
+  useEffect(() => {
+    cubeRef.current?.setColorKey(colorKey);
+  }, [colorKey, volumeEpoch]);
+
+  // Escape cancels the eyedropper.
+  useEffect(() => {
+    if (!picking) return;
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setPicking(false);
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [picking]);
+
+  const handleCanvasClick = useCallback(
+    (e: ReactMouseEvent<HTMLCanvasElement>) => {
+      if (!picking) return;
+      const rgb = cubeRef.current?.pickPlaneColor(e.clientX, e.clientY);
+      if (!rgb) return; // missed the cut face: keep waiting
+      setColorKey((k) => ({ ...k, color: rgb, enabled: true }));
+      setPicking(false);
+    },
+    [picking],
+  );
 
   // Spacing/dims change the volume box and re-apply the current plane.
   useEffect(() => {
@@ -581,6 +620,39 @@ export function App() {
               </div>
             </SidebarGroupContent>
           </SidebarGroup>
+
+          <SidebarGroup>
+            <SidebarGroupLabel>Viewer</SidebarGroupLabel>
+            <SidebarGroupContent className="flex flex-col gap-2">
+              <div className="flex items-center gap-2">
+                <Checkbox
+                  id="show-guides"
+                  checked={showGuides}
+                  onCheckedChange={(c) => setShowGuides(c === true)}
+                />
+                <Label htmlFor="show-guides" className="text-xs">
+                  Show the cut-face outline and pivot line
+                </Label>
+              </div>
+            </SidebarGroupContent>
+          </SidebarGroup>
+
+          <SidebarGroup>
+            <SidebarGroupLabel>Tools</SidebarGroupLabel>
+            <SidebarGroupContent className="flex flex-col gap-2">
+              <Button
+                id="open-key"
+                size="sm"
+                variant={rightPanel === 'key' ? 'default' : 'outline'}
+                onClick={() => setRightPanel((cur) => (cur === 'key' ? 'none' : 'key'))}
+              >
+                Colour key...{colorKey.enabled && ' (on)'}
+              </Button>
+              <p className="px-0.5 text-[11px] leading-snug text-muted-foreground">
+                Hide or isolate a colour picked from the slice, e.g. hide the sky to see the clouds.
+              </p>
+            </SidebarGroupContent>
+          </SidebarGroup>
         </SidebarContent>
       </Sidebar>
 
@@ -590,9 +662,35 @@ export function App() {
           width={800}
           height={600}
           ref={cubeCanvasRef}
-          className="absolute inset-0 h-full w-full"
+          onClick={handleCanvasClick}
+          className={cn('absolute inset-0 h-full w-full', picking && 'cursor-crosshair')}
         />
       </SidebarInset>
+
+      {rightPanel === 'key' && (
+        <aside
+          id="color-key-panel"
+          className="flex h-svh w-[320px] shrink-0 flex-col border-l bg-sidebar text-sidebar-foreground"
+        >
+          <header className="flex items-center justify-between border-b px-4 py-3">
+            <div>
+              <h2 className="text-sm font-semibold tracking-tight">Colour key</h2>
+              <p className="text-[11px] text-muted-foreground">Viewer only; exports are never keyed.</p>
+            </div>
+            <Button size="icon-sm" variant="ghost" onClick={() => setRightPanel('none')} aria-label="Close colour key">
+              <X />
+            </Button>
+          </header>
+          <div className="flex-1 overflow-y-auto px-4 py-4">
+            <ColorKeyPanel
+              value={colorKey}
+              onChange={setColorKey}
+              picking={picking}
+              onPickToggle={() => setPicking((p) => !p)}
+            />
+          </div>
+        </aside>
+      )}
     </SidebarProvider>
   );
 }
