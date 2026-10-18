@@ -3,7 +3,7 @@
 Stack a video into a 3D cube — one frame per layer along the time axis —
 and fly around it. 
 
-Hosted on Cloudflare Workers: **https://video-cube.kiyo-n-zane.com**
+Weekend project hosted on Cloudflare: **https://video-cube.kiyo-n-zane.com**
 
 https://github.com/user-attachments/assets/88a57dd4-33ea-4dc4-9b94-ddc9d60e6949
 
