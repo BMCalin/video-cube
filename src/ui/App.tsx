@@ -21,6 +21,7 @@ import { cn } from '@/lib/utils';
 import { CubeRenderer } from '@/render/cubeRenderer';
 import { ingestVideo } from '@/ingest/ingestVideo';
 import { volumeHalfExtents } from '@/render/resliceMath';
+import { offsetAboutPivot, pivotSegment3D } from '@/render/tiltPivot';
 import type { Vec3 } from '@/render/linalg';
 import { syntheticVolume } from './syntheticVolume';
 
@@ -149,6 +150,10 @@ export function App() {
   const [rate, setRate] = useState(10);
   const [rateDirty, setRateDirty] = useState(false);
   const [viewerRes, setViewerRes] = useState(512);
+  // Tilt pivot along the tilt direction: 0 = top edge, 0.5 = centre, 1 = bottom (at azimuth 0).
+  const [pivot, setPivot] = useState(0.5);
+  // Bumped on every ingest so plane-overlay effects re-run for the new renderer.
+  const [volumeEpoch, setVolumeEpoch] = useState(0);
   const [opacity, setOpacity] = useState(8);
   const [planeImg, setPlaneImg] = useState(100);
   const [showClipped, setShowClipped] = useState(false);
@@ -207,6 +212,13 @@ export function App() {
     });
   }, [reach]);
 
+  // Keep the orange tilt-pivot marker on the cut face in sync.
+  useEffect(() => {
+    const plane3 = { azimuth: plane.azimuth, elevation: plane.elevation, offset: clampedOffset };
+    // Drawn 1.5% inside the frame so it stays distinguishable from the outline at 0% / 100%.
+    cubeRef.current?.setPivotLine(pivotSegment3D(plane3, half, 0.015 + pivot * 0.97));
+  }, [plane.azimuth, plane.elevation, clampedOffset, half, pivot, volumeEpoch]);
+
   // Spacing/dims change the volume box and re-apply the current plane.
   useEffect(() => {
     cubeRef.current?.setSpacing(half);
@@ -238,6 +250,7 @@ export function App() {
           cubeRef.current = cube;
         }
         setDims(nextDims);
+        setVolumeEpoch((e) => e + 1);
       } catch (e) {
         setError(e instanceof Error ? e.message : 'Ingest failed.');
       } finally {
@@ -314,6 +327,20 @@ export function App() {
     planeTouchedRef.current = true;
     setPlaneState((p) => ({ ...p, ...partial }));
   }, []);
+
+  // Azimuth / elevation changes rotate the plane around the tilt pivot line,
+  // so the moment shown at the pivot stays put while the plane tilts.
+  const rotatePlane = useCallback(
+    (angles: { azimuth?: number; elevation?: number }) => {
+      planeTouchedRef.current = true;
+      setPlaneState((p) => {
+        const next = { azimuth: angles.azimuth ?? p.azimuth, elevation: angles.elevation ?? p.elevation };
+        const prev = { azimuth: p.azimuth, elevation: p.elevation, offset: Math.min(reach, Math.max(-reach, p.offset)) };
+        return { ...p, ...next, offset: offsetAboutPivot(prev, next, half, pivot) };
+      });
+    },
+    [half, reach, pivot],
+  );
 
   const setAxis = useCallback(
     (axis: Axis) => {
@@ -496,7 +523,7 @@ export function App() {
                 max={180}
                 step={1}
                 value={plane.azimuth}
-                onValueChange={(v) => updatePlane({ azimuth: v })}
+                onValueChange={(v) => rotatePlane({ azimuth: v })}
               />
               <SliderRow
                 id="elevation"
@@ -506,8 +533,22 @@ export function App() {
                 max={90}
                 step={1}
                 value={plane.elevation}
-                onValueChange={(v) => updatePlane({ elevation: v })}
+                onValueChange={(v) => rotatePlane({ elevation: v })}
               />
+              <SliderRow
+                id="pivot"
+                label="Tilt pivot"
+                unit="%"
+                min={0}
+                max={100}
+                step={1}
+                value={Math.round(pivot * 100)}
+                onValueChange={(v) => setPivot(v / 100)}
+              />
+              <p className="-mt-1.5 text-[11px] leading-snug text-muted-foreground">
+                Line the plane tilts around: 0% top, 50% centre, 100% bottom (at azimuth 0 deg). That line keeps its moment
+                in time.
+              </p>
               <SliderRow
                 id="offset"
                 label="Position"
