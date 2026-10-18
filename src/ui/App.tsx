@@ -1,23 +1,13 @@
-import { X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { ChangeEvent, DragEvent, MouseEvent as ReactMouseEvent } from 'react';
+import type { MouseEvent as ReactMouseEvent } from 'react';
 import {
   Sidebar,
   SidebarContent,
-  SidebarGroup,
-  SidebarGroupContent,
-  SidebarGroupLabel,
   SidebarHeader,
   SidebarInset,
   SidebarProvider,
 } from '@/components/ui/sidebar';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
-import { Button } from '@/components/ui/button';
-import { Checkbox } from '@/components/ui/checkbox';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Progress } from '@/components/ui/progress';
-import { Slider } from '@/components/ui/slider';
 import { cn } from '@/lib/utils';
 import { CubeRenderer } from '@/render/cubeRenderer';
 import { ingestVideo } from '@/ingest/ingestVideo';
@@ -25,110 +15,16 @@ import { volumeHalfExtents } from '@/render/resliceMath';
 import { offsetAboutPivot, pivotSegment3D } from '@/render/tiltPivot';
 import { DEFAULT_COLOR_KEY } from '@/render/colorKey';
 import type { ColorKey } from '@/render/colorKey';
-import { ColorKeyPanel } from './ColorKeyPanel';
 import type { Vec3 } from '@/render/linalg';
 import { syntheticVolume } from './syntheticVolume';
-
-type Axis = 'x' | 'y' | 'z';
-
-/**
- * Long-side size of the viewer volume. Larger values sharpen the cut face at
- * the cost of GPU memory (w x h x frames x 4 bytes).
- */
-const VIEWER_RESOLUTIONS = [512, 1024, 1536];
-
-interface PlaneState {
-  azimuth: number;
-  elevation: number;
-  offset: number;
-  flip: boolean;
-  axis: Axis | null;
-}
-
-/** Cut faces the time axis so it slices frames, parked a few frames into the
- *  stack (offset is refined once the volume extent is known). */
-const INITIAL_PLANE: PlaneState = {
-  azimuth: 0,
-  elevation: 90,
-  offset: 0,
-  flip: false,
-  axis: 'z',
-};
-
-function planeNormal(azimuth: number, elevation: number): Vec3 {
-  const az = (azimuth * Math.PI) / 180;
-  const el = (elevation * Math.PI) / 180;
-  return [Math.cos(el) * Math.sin(az), Math.cos(el) * Math.cos(az), Math.sin(el)];
-}
-
-function clamp(v: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, v));
-}
-
-function SliderRow(props: {
-  id: string;
-  label: string;
-  unit: string;
-  min: number;
-  max: number;
-  step: number;
-  value: number;
-  onValueChange: (v: number) => void;
-}) {
-  const [text, setText] = useState(String(props.value));
-
-  // Slider / external state changes rewrite the text box (unless the user is
-  // mid-edit on a value that still parses to the same number).
-  useEffect(() => {
-    setText(String(props.value));
-  }, [props.value]);
-
-  const onInputChange = (e: ChangeEvent<HTMLInputElement>) => {
-    const raw = e.target.value;
-    setText(raw);
-    const v = Number.parseFloat(raw);
-    if (!Number.isNaN(v)) props.onValueChange(clamp(v, props.min, props.max));
-  };
-
-  return (
-    <div className="flex flex-col gap-1.5">
-      <div className="flex items-center justify-between">
-        <Label htmlFor={props.id} className="text-xs">
-          {props.label}
-        </Label>
-        {props.unit && (
-          <span className="text-xs text-muted-foreground">{props.unit}</span>
-        )}
-      </div>
-      <div className="flex items-center gap-2">
-        <Slider
-          aria-label={props.label}
-          min={props.min}
-          max={props.max}
-          step={props.step}
-          value={[props.value]}
-          onValueChange={([v]) => props.onValueChange(v)}
-          className="flex-1"
-        />
-        {/* Native number input — also the drive surface for the e2e harness
-            (value assignment + bubbled 'input' event, which React onChange
-            receives). Resynced on blur so half-typed drafts don't stick. */}
-        <Input
-          id={props.id}
-          type="number"
-          inputMode="decimal"
-          min={props.min}
-          max={props.max}
-          step={props.step}
-          value={text}
-          onChange={onInputChange}
-          onBlur={() => setText(String(props.value))}
-          className="h-7 w-16 text-xs tabular-nums"
-        />
-      </div>
-    </div>
-  );
-}
+import { INITIAL_PLANE, planeNormal } from './planeState';
+import type { Axis, PlaneState } from './planeState';
+import { SourcePanel } from './panels/SourcePanel';
+import { SamplingPanel } from './panels/SamplingPanel';
+import { AppearancePanel } from './panels/AppearancePanel';
+import { SlicePlanePanel } from './panels/SlicePlanePanel';
+import { ToolsPanel } from './panels/ToolsPanel';
+import { ColorKeyAside } from './panels/ColorKeyAside';
 
 export function App() {
   const [webgl2Supported] = useState(
@@ -199,11 +95,14 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [webgl2Supported]);
 
-  // Derived plane drives the renderer. The cut is always on; before the
-  // user touches a plane control it stays parked near the start of the stack.
+  // Volume box and derived plane drive the renderer. The cut is always on;
+  // before the user touches a plane control it stays parked near the start.
   useEffect(() => {
-    cubeRef.current?.setPlane(normal, clampedOffset, true, plane.flip);
-  }, [normal, clampedOffset, plane.flip]);
+    const cube = cubeRef.current;
+    if (!cube) return;
+    cube.setSpacing(half);
+    cube.setPlane(normal, clampedOffset, true, plane.flip);
+  }, [half, normal, clampedOffset, plane.flip]);
 
   // Park the cut three frames into the stack so the section is visible from
   // boot; once the user moves a plane control, their offset stands.
@@ -258,12 +157,6 @@ export function App() {
     [picking],
   );
 
-  // Spacing/dims change the volume box and re-apply the current plane.
-  useEffect(() => {
-    cubeRef.current?.setSpacing(half);
-    cubeRef.current?.setPlane(normal, clampedOffset, true, plane.flip);
-  }, [half, normal, clampedOffset, plane.flip]);
-
   const ingest = useCallback(
     async (file: File) => {
       setIngesting(true);
@@ -308,24 +201,6 @@ export function App() {
       void ingest(file);
     },
     [ingest],
-  );
-
-  const handleFile = useCallback(
-    (e: ChangeEvent<HTMLInputElement>) => {
-      const file = e.target.files?.[0];
-      if (file) ingestFile(file);
-    },
-    [ingestFile],
-  );
-
-  const handleDrop = useCallback(
-    (e: DragEvent<HTMLDivElement>) => {
-      e.preventDefault();
-      setDragOver(false);
-      const file = e.dataTransfer.files?.[0];
-      if (file) ingestFile(file);
-    },
-    [ingestFile],
   );
 
   const handleRate = useCallback((v: number) => {
@@ -414,239 +289,51 @@ export function App() {
           <h1 className="px-2 py-1 text-sm font-semibold tracking-tight">Video Cube</h1>
         </SidebarHeader>
         <SidebarContent>
-          <SidebarGroup>
-            <SidebarGroupLabel>Source</SidebarGroupLabel>
-            <SidebarGroupContent className="flex flex-col gap-2">
-              <div
-                onDragOver={(e) => {
-                  e.preventDefault();
-                  setDragOver(true);
-                }}
-                onDragLeave={() => setDragOver(false)}
-                onDrop={handleDrop}
-                className={cn(
-                  'flex flex-col items-center gap-2 rounded-md border border-dashed p-4 transition-colors',
-                  dragOver && 'border-primary bg-accent',
-                )}
-              >
-                <span className="text-xs text-muted-foreground">
-                  {ingesting ? 'Sampling…' : 'Drop a video here'}
-                </span>
-                <Button asChild variant="outline" size="sm">
-                  <label htmlFor="file" className="cursor-pointer">
-                    Load video
-                  </label>
-                </Button>
-              </div>
-              <input
-                id="file"
-                type="file"
-                accept="video/*"
-                className="hidden"
-                onChange={handleFile}
-              />
-              {error && (
-                <Alert variant="destructive" id="msg">
-                  <AlertTitle>Ingest failed</AlertTitle>
-                  <AlertDescription>{error}</AlertDescription>
-                </Alert>
-              )}
-            </SidebarGroupContent>
-          </SidebarGroup>
-
-          <SidebarGroup>
-            <SidebarGroupLabel>Sampling</SidebarGroupLabel>
-            <SidebarGroupContent className="flex flex-col gap-3">
-              <SliderRow
-                id="rate"
-                label="Sample rate"
-                unit="frames/sec"
-                min={1}
-                max={40}
-                step={1}
-                value={rate}
-                onValueChange={handleRate}
-              />
-              <div className="flex flex-col gap-1.5">
-                <Label className="text-xs">Viewer resolution</Label>
-                <div className="flex gap-1.5">
-                  {VIEWER_RESOLUTIONS.map((r) => (
-                    <Button
-                      key={r}
-                      data-res={r}
-                      size="sm"
-                      variant={viewerRes === r ? 'default' : 'outline'}
-                      className="flex-1"
-                      disabled={max3dTexture > 0 && r > max3dTexture}
-                      onClick={() => handleViewerRes(r)}
-                    >
-                      {r}
-                    </Button>
-                  ))}
-                </div>
-              </div>
-              {rateDirty && (
-                <Button size="sm" onClick={handleResample}>
-                  Resample
-                </Button>
-              )}
-              {ingesting && (
-                <div id="progress" className="flex flex-col gap-1">
-                  <Progress value={progress} />
-                  <span id="progress-num" className="text-xs text-muted-foreground">
-                    Sampling {progress}%
-                  </span>
-                </div>
-              )}
-            </SidebarGroupContent>
-          </SidebarGroup>
-
-          <SidebarGroup>
-            <SidebarGroupLabel>Appearance</SidebarGroupLabel>
-            <SidebarGroupContent className="flex flex-col gap-3">
-              <SliderRow
-                id="opacity"
-                label="Cube opacity"
-                unit=""
-                min={0.5}
-                max={100}
-                step={0.5}
-                value={opacity}
-                onValueChange={handleOpacity}
-              />
-              <SliderRow
-                id="plane-img"
-                label="Plane image opacity"
-                unit=""
-                min={0}
-                max={100}
-                step={1}
-                value={planeImg}
-                onValueChange={handlePlaneImg}
-              />
-              <SliderRow
-                id="spacing"
-                label="Spacing"
-                unit="×"
-                min={0.2}
-                max={3}
-                step={0.05}
-                value={spacing}
-                onValueChange={setSpacing}
-              />
-            </SidebarGroupContent>
-          </SidebarGroup>
-
-          <SidebarGroup>
-            <SidebarGroupLabel>Slice plane</SidebarGroupLabel>
-            <SidebarGroupContent className="flex flex-col gap-3">
-              <div className="flex gap-1.5">
-                {(['x', 'y', 'z'] as const).map((a) => (
-                  <Button
-                    key={a}
-                    data-axis={a}
-                    size="sm"
-                    variant={plane.axis === a ? 'default' : 'outline'}
-                    className="flex-1"
-                    onClick={() => setAxis(a)}
-                  >
-                    {a.toUpperCase()}
-                  </Button>
-                ))}
-              </div>
-              <SliderRow
-                id="azimuth"
-                label="Azimuth"
-                unit="°"
-                min={-180}
-                max={180}
-                step={1}
-                value={plane.azimuth}
-                onValueChange={(v) => rotatePlane({ azimuth: v })}
-              />
-              <SliderRow
-                id="elevation"
-                label="Elevation"
-                unit="°"
-                min={-90}
-                max={90}
-                step={1}
-                value={plane.elevation}
-                onValueChange={(v) => rotatePlane({ elevation: v })}
-              />
-              <SliderRow
-                id="pivot"
-                label="Tilt pivot"
-                unit="%"
-                min={0}
-                max={100}
-                step={1}
-                value={Math.round(pivot * 100)}
-                onValueChange={(v) => setPivot(v / 100)}
-              />
-              <p className="-mt-1.5 text-[11px] leading-snug text-muted-foreground">
-                Line the plane tilts around: 0% top, 50% centre, 100% bottom (at azimuth 0 deg). That line keeps its moment
-                in time.
-              </p>
-              <SliderRow
-                id="offset"
-                label="Position"
-                unit=""
-                min={-reach}
-                max={reach}
-                step={0.005}
-                value={clampedOffset}
-                onValueChange={(v) => updatePlane({ offset: v })}
-              />
-              <div className="flex items-center gap-2">
-                <Checkbox
-                  id="flip"
-                  checked={plane.flip}
-                  onCheckedChange={(c) => updatePlane({ flip: c === true })}
-                />
-                <Label htmlFor="flip" className="text-xs">
-                  Flip cut side
-                </Label>
-              </div>
-              <div className="flex items-center gap-2">
-                <Checkbox
-                  id="show-clipped"
-                  checked={showClipped}
-                  onCheckedChange={(c) => handleShowClipped(c === true)}
-                />
-                <Label htmlFor="show-clipped" className="text-xs">
-                  Show clipped side
-                </Label>
-              </div>
-              <div className="flex items-center gap-2">
-                <Checkbox
-                  id="show-guides"
-                  checked={showGuides}
-                  onCheckedChange={(c) => setShowGuides(c === true)}
-                />
-                <Label htmlFor="show-guides" className="text-xs">
-                  Show the cut-face outline and pivot line
-                </Label>
-              </div>
-            </SidebarGroupContent>
-          </SidebarGroup>
-
-          <SidebarGroup>
-            <SidebarGroupLabel>Tools</SidebarGroupLabel>
-            <SidebarGroupContent className="flex flex-col gap-2">
-              <Button
-                id="open-key"
-                size="sm"
-                variant={rightPanel === 'key' ? 'default' : 'outline'}
-                onClick={() => setRightPanel((cur) => (cur === 'key' ? 'none' : 'key'))}
-              >
-                Colour key...{colorKey.enabled && ' (on)'}
-              </Button>
-              <p className="px-0.5 text-[11px] leading-snug text-muted-foreground">
-                Hide or isolate a colour picked from the slice, e.g. hide the sky to see the clouds.
-              </p>
-            </SidebarGroupContent>
-          </SidebarGroup>
+          <SourcePanel
+            ingesting={ingesting}
+            dragOver={dragOver}
+            error={error}
+            onDragOverChange={setDragOver}
+            onFile={ingestFile}
+          />
+          <SamplingPanel
+            rate={rate}
+            onRate={handleRate}
+            viewerRes={viewerRes}
+            onViewerRes={handleViewerRes}
+            max3dTexture={max3dTexture}
+            rateDirty={rateDirty}
+            onResample={handleResample}
+            ingesting={ingesting}
+            progress={progress}
+          />
+          <AppearancePanel
+            opacity={opacity}
+            onOpacity={handleOpacity}
+            planeImg={planeImg}
+            onPlaneImg={handlePlaneImg}
+            spacing={spacing}
+            onSpacing={setSpacing}
+          />
+          <SlicePlanePanel
+            plane={plane}
+            reach={reach}
+            pivot={pivot}
+            onPivot={setPivot}
+            showClipped={showClipped}
+            onShowClipped={handleShowClipped}
+            showGuides={showGuides}
+            onShowGuides={setShowGuides}
+            onAxis={setAxis}
+            onRotate={rotatePlane}
+            onOffset={(v) => updatePlane({ offset: v })}
+            onFlip={(flip) => updatePlane({ flip })}
+          />
+          <ToolsPanel
+            keyActive={rightPanel === 'key'}
+            keyOn={colorKey.enabled}
+            onToggleKey={() => setRightPanel((cur) => (cur === 'key' ? 'none' : 'key'))}
+          />
         </SidebarContent>
       </Sidebar>
 
@@ -662,28 +349,13 @@ export function App() {
       </SidebarInset>
 
       {rightPanel === 'key' && (
-        <aside
-          id="color-key-panel"
-          className="flex h-svh w-[320px] shrink-0 flex-col border-l bg-sidebar text-sidebar-foreground"
-        >
-          <header className="flex items-center justify-between border-b px-4 py-3">
-            <div>
-              <h2 className="text-sm font-semibold tracking-tight">Colour key</h2>
-              <p className="text-[11px] text-muted-foreground">Viewer only; exports are never keyed.</p>
-            </div>
-            <Button size="icon-sm" variant="ghost" onClick={() => setRightPanel('none')} aria-label="Close colour key">
-              <X />
-            </Button>
-          </header>
-          <div className="flex-1 overflow-y-auto px-4 py-4">
-            <ColorKeyPanel
-              value={colorKey}
-              onChange={setColorKey}
-              picking={picking}
-              onPickToggle={() => setPicking((p) => !p)}
-            />
-          </div>
-        </aside>
+        <ColorKeyAside
+          colorKey={colorKey}
+          onColorKeyChange={setColorKey}
+          picking={picking}
+          onPickToggle={() => setPicking((p) => !p)}
+          onClose={() => setRightPanel('none')}
+        />
       )}
     </SidebarProvider>
   );
