@@ -26,6 +26,12 @@ import { syntheticVolume } from './syntheticVolume';
 
 type Axis = 'x' | 'y' | 'z';
 
+/**
+ * Long-side size of the viewer volume. Larger values sharpen the cut face at
+ * the cost of GPU memory (w x h x frames x 4 bytes).
+ */
+const VIEWER_RESOLUTIONS = [512, 1024, 1536];
+
 interface PlaneState {
   azimuth: number;
   elevation: number;
@@ -123,6 +129,11 @@ export function App() {
   const [webgl2Supported] = useState(
     () => typeof document !== 'undefined' && !!document.createElement('canvas').getContext('webgl2'),
   );
+  // Largest 3D texture edge the GPU accepts; caps the viewer resolution.
+  const [max3dTexture] = useState(() => {
+    const gl = document.createElement('canvas').getContext('webgl2');
+    return gl ? (gl.getParameter(gl.MAX_3D_TEXTURE_SIZE) as number) : 0;
+  });
 
   const cubeCanvasRef = useRef<HTMLCanvasElement>(null);
   const cubeRef = useRef<CubeRenderer | null>(null);
@@ -137,6 +148,7 @@ export function App() {
   const [progress, setProgress] = useState(0);
   const [rate, setRate] = useState(10);
   const [rateDirty, setRateDirty] = useState(false);
+  const [viewerRes, setViewerRes] = useState(512);
   const [opacity, setOpacity] = useState(8);
   const [planeImg, setPlaneImg] = useState(100);
   const [showClipped, setShowClipped] = useState(false);
@@ -206,7 +218,7 @@ export function App() {
       setIngesting(true);
       setProgress(0);
       try {
-        const r = await ingestVideo(file, rate, 512, (done, total) =>
+        const r = await ingestVideo(file, rate, viewerRes, (done, total) =>
           setProgress(Math.round((done / total) * 100)),
         );
         const nextDims: Vec3 = [r.width, r.height, r.depth];
@@ -232,7 +244,7 @@ export function App() {
         setIngesting(false);
       }
     },
-    [rate, spacing, opacity, planeImg, showClipped, plane.azimuth, plane.elevation, clampedOffset, plane.flip],
+    [rate, viewerRes, spacing, opacity, planeImg, showClipped, plane.azimuth, plane.elevation, clampedOffset, plane.flip],
   );
 
   const ingestFile = useCallback(
@@ -266,6 +278,11 @@ export function App() {
 
   const handleRate = useCallback((v: number) => {
     setRate(v);
+    if (lastFileRef.current) setRateDirty(true);
+  }, []);
+
+  const handleViewerRes = useCallback((v: number) => {
+    setViewerRes(v);
     if (lastFileRef.current) setRateDirty(true);
   }, []);
 
@@ -384,6 +401,24 @@ export function App() {
                 value={rate}
                 onValueChange={handleRate}
               />
+              <div className="flex flex-col gap-1.5">
+                <Label className="text-xs">Viewer resolution</Label>
+                <div className="flex gap-1.5">
+                  {VIEWER_RESOLUTIONS.map((r) => (
+                    <Button
+                      key={r}
+                      data-res={r}
+                      size="sm"
+                      variant={viewerRes === r ? 'default' : 'outline'}
+                      className="flex-1"
+                      disabled={max3dTexture > 0 && r > max3dTexture}
+                      onClick={() => handleViewerRes(r)}
+                    >
+                      {r}
+                    </Button>
+                  ))}
+                </div>
+              </div>
               {rateDirty && (
                 <Button size="sm" onClick={handleResample}>
                   Resample
