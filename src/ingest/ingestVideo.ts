@@ -11,7 +11,7 @@ export interface IngestResult {
 /**
  * 'seeked' alone can fire before the new frame is presented, so drawImage
  * paints nothing (black). Wait for the composited frame via rVFC when
- * available — but race it with a timeout, because rVFC never fires for a
+ * available - but race it with a timeout, because rVFC never fires for a
  * paused video in some environments (headless Chrome among them).
  */
 function waitForFrame(video: HTMLVideoElement): Promise<void> {
@@ -35,7 +35,7 @@ function waitForFrame(video: HTMLVideoElement): Promise<void> {
 }
 
 /** Seek is unreliable at the exact last frame; clamp into the file. */
-async function seek(video: HTMLVideoElement, t: number): Promise<void> {
+export async function seek(video: HTMLVideoElement, t: number): Promise<void> {
   await new Promise<void>((resolve) => {
     const target = Math.min(t, Math.max(0, video.duration - 0.05));
     const done = () => {
@@ -50,7 +50,7 @@ async function seek(video: HTMLVideoElement, t: number): Promise<void> {
   await waitForFrame(video);
 }
 
-/** Hard cap on sampled frames — volume texture memory + shader loop bound. */
+/** Hard cap on sampled frames - volume texture memory + shader loop bound. */
 export const MAX_FRAMES = 192;
 
 export async function ingestVideo(
@@ -90,7 +90,7 @@ export async function ingestVideo(
       ctx.drawImage(video, 0, 0, width, height);
       const px = ctx.getImageData(0, 0, width, height).data;
       frames.push(px);
-      // mean luma over a sparse sample of pixels — diagnostic for black frames
+      // mean luma over a sparse sample of pixels - diagnostic for black frames
       let luma = 0;
       const stride = Math.max(4, Math.floor(px.length / 4 / 256) * 4);
       let n = 0;
