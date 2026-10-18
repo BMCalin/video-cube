@@ -618,12 +618,6 @@ export function App() {
                   Show clipped side
                 </Label>
               </div>
-            </SidebarGroupContent>
-          </SidebarGroup>
-
-          <SidebarGroup>
-            <SidebarGroupLabel>Viewer</SidebarGroupLabel>
-            <SidebarGroupContent className="flex flex-col gap-2">
               <div className="flex items-center gap-2">
                 <Checkbox
                   id="show-guides"
