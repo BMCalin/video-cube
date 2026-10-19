@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { renderTimeSlice, volumeStack } from '../src/export/renderTimeSlice';
+import { renderTimeSlice, splitMatte, volumeStack } from '../src/export/renderTimeSlice';
 import type { FrameStack } from '../src/export/renderTimeSlice';
 
 /** RGB stack where every pixel of frame k has red = k * step. */
@@ -89,5 +89,43 @@ describe('renderTimeSlice', () => {
     const out = new Uint8ClampedArray(w * h * 4);
     renderTimeSlice(volumeStack(data, [w, h, d]), { time: 0.5, span: 0, azimuth: 0 }, { edge: 'hold', blend: false }, out);
     expect(out[0]).toBe(50);
+  });
+});
+
+describe('export colour key', () => {
+  const W = 2;
+  const H = 1;
+  // frame 0: left pixel blue, right pixel white
+  const frame = new Uint8Array([60, 120, 230, 250, 250, 250]);
+  const stack: FrameStack = { width: W, height: H, count: 1, channels: 3, first: 0, last: 0, frame: () => frame };
+  const keep = (r: number, g: number, b: number) => (b > r + 50 ? 0 : 1); // hide blue
+
+  it('replaces keyed pixels with the background colour', () => {
+    const out = new Uint8ClampedArray(W * H * 4);
+    renderTimeSlice(stack, { time: 0.5, span: 0, azimuth: 0 }, { edge: 'hold', blend: true, key: { keep, background: [10, 20, 30], transparent: false } }, out);
+    expect([...out.slice(0, 4)]).toEqual([10, 20, 30, 255]);
+    expect([...out.slice(4, 8)]).toEqual([250, 250, 250, 255]);
+  });
+
+  it('or makes them transparent', () => {
+    const out = new Uint8ClampedArray(W * H * 4);
+    renderTimeSlice(stack, { time: 0.5, span: 0, azimuth: 0 }, { edge: 'hold', blend: true, key: { keep, background: [0, 0, 0], transparent: true } }, out);
+    expect(out[3]).toBe(0);
+    expect(out[7]).toBe(255);
+  });
+});
+
+describe('splitMatte', () => {
+  it('turns alpha into a grey matte and composites the colour over the background', () => {
+    const out = new Uint8ClampedArray([100, 100, 100, 255, 200, 0, 0, 0, 200, 0, 0, 128]);
+    const matte = new Uint8ClampedArray(out.length);
+    splitMatte(out, matte, [0, 0, 255]);
+    expect([...matte.slice(0, 4)]).toEqual([255, 255, 255, 255]);
+    expect([...matte.slice(4, 8)]).toEqual([0, 0, 0, 255]);
+    expect(matte[8]).toBe(128);
+    expect([...out.slice(0, 4)]).toEqual([100, 100, 100, 255]);
+    expect([...out.slice(4, 8)]).toEqual([0, 0, 255, 255]);
+    expect(out[11]).toBe(255);
+    expect(out[8]).toBeCloseTo(100, -1);
   });
 });

@@ -1,6 +1,6 @@
 /**
  * Sidebar controls for the viewer colour key (hide or isolate a colour range
- * picked from the cut face). Purely visual: exports are never keyed.
+ * picked from the cut face). Keys the 3D view; the export panel can apply it too.
  */
 import { Pipette } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -130,8 +130,9 @@ export function ColorKeyPanel(props: {
         </Label>
       </div>
       <p className="-mt-1 text-[11px] leading-snug text-muted-foreground">
-        Viewer only: the preview and exports are never keyed. Tip: hide the sky to see the volume of the clouds
-        change over time; raise Cube opacity to make it denser.
+        Keys the 3D view. The time-slice preview and export are keyed only when you enable it in the export
+        panel. Tip: hide the sky to see the volume of the clouds change over time; raise Cube opacity to make it
+        denser.
       </p>
 
       <div className="mt-2 flex items-center gap-2 border-t pt-3">

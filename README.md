@@ -130,9 +130,9 @@ goes back to the original file (see below).
 ### Colour key
 
 Open it with **Colour key...** under **Tools** in the sidebar; it appears as a
-panel on the right (the button shows "(on)" while a key is active). It is a
-visual aid for exploring the volume and never affects the preview or the
-export.
+panel on the right (the button shows "(on)" while a key is active). It keys
+the 3D view; the time-slice preview and export use it only when you enable
+**Apply the colour key** in the export panel (see below).
 
 - **Hide colour** makes voxels close to the key colour transparent, for
   example the blue sky, so the clouds remain and their volume can be followed
@@ -209,12 +209,28 @@ a smooth gradient. Turn it off to see the individual source frames as bands.
 
 ### Preview
 
-The preview renders the animation live from the viewer's volume. Use
-play/pause and the scrubber in the panel, or switch the main view from
-**3D view** to **Time-slice preview** (buttons at the top of the screen) to
-watch it full size with a transport bar at the bottom. For a sharper preview,
-raise the **Viewer resolution** and resample. The output uses the same maths
-at full resolution.
+The preview renders the animation live from the viewer's volume and is shown
+full size in the main view: press **Open the full-size preview** in the panel,
+or switch the main view from **3D view** to **Time-slice preview** (buttons at
+the top of the screen). A transport bar at the bottom plays and scrubs it; the
+panel has the same play button and scrubber, which also work while you watch
+the 3D view (with **Move the 3D slice plane with the preview** on, the plane
+follows along). For a sharper preview, raise the **Viewer resolution** and
+resample. The output uses the same maths at full resolution.
+
+### Colour key in the export
+
+**Apply the colour key to the preview and export** uses the settings from the
+Colour key panel (turn the key on there first). Keyed pixels become a
+**background colour** of your choice, or **transparent** in PNG stills and PNG
+sequences, for compositing in another program. MP4 cannot store transparency,
+so a video always uses the background colour. The preview shows transparent
+areas over a checkerboard.
+
+For MP4, tick **Also export a matte video** to get the transparency back: a
+second file (`..._matte.mp4`) is written frame for frame with the colour video,
+white where the image is kept and black where it is keyed. Use it as a luma
+matte (track matte) in After Effects, Premiere, DaVinci Resolve or Cinema 4D.
 
 ### Output
 

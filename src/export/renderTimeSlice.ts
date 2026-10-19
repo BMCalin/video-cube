@@ -30,10 +30,22 @@ export interface FrameStack {
 /** What to draw where the slice reaches before the first or after the last frame. */
 export type EdgeMode = 'hold' | 'black';
 
+/** Colour key applied to exported pixels. */
+export interface RenderKey {
+  /** Opacity multiplier for an 8-bit colour: 1 keeps it, 0 keys it out. */
+  keep: (r: number, g: number, b: number) => number;
+  /** Colour that replaces keyed pixels (8-bit RGB), unless transparent. */
+  background: [number, number, number];
+  /** Write keyed pixels as transparent alpha instead of the background colour. */
+  transparent: boolean;
+}
+
 export interface RenderOptions {
   edge: EdgeMode;
   /** Linear blend between neighbouring frames (smooth gradient) instead of nearest frame. */
   blend: boolean;
+  /** Optional colour key; keyed pixels become the background colour or transparent. */
+  key?: RenderKey | null;
 }
 
 /** Wrap a packed depth-major RGBA volume (as used by the 3D viewer) as a FrameStack. */
@@ -115,6 +127,51 @@ export function renderTimeSlice(
         out[o + 2] = a[p + 2];
       }
       out[o + 3] = 255;
+    }
+  }
+  if (opts.key) applyKey(out, W * H, opts.key);
+}
+
+/**
+ * Split a frame rendered with a transparent key into a colour frame and a
+ * matte. `matte` receives the alpha as grey (white = kept, black = keyed);
+ * `out` is composited over `background` and made opaque, so it matches what
+ * the background-colour mode would have produced.
+ */
+export function splitMatte(
+  out: Uint8ClampedArray | Uint8Array,
+  matte: Uint8ClampedArray | Uint8Array,
+  background: [number, number, number],
+): void {
+  const [br, bg, bb] = background;
+  for (let o = 0; o < out.length; o += 4) {
+    const a = out[o + 3];
+    matte[o] = a;
+    matte[o + 1] = a;
+    matte[o + 2] = a;
+    matte[o + 3] = 255;
+    if (a < 255) {
+      const k = a / 255;
+      out[o] = br + (out[o] - br) * k;
+      out[o + 1] = bg + (out[o + 1] - bg) * k;
+      out[o + 2] = bb + (out[o + 2] - bb) * k;
+      out[o + 3] = 255;
+    }
+  }
+}
+
+/** Replace keyed pixels with the background colour, or fade their alpha. */
+function applyKey(out: Uint8ClampedArray | Uint8Array, pixels: number, key: RenderKey): void {
+  const [br, bg, bb] = key.background;
+  for (let i = 0, o = 0; i < pixels; i++, o += 4) {
+    const k = key.keep(out[o], out[o + 1], out[o + 2]);
+    if (k >= 1) continue;
+    if (key.transparent) {
+      out[o + 3] = k * 255;
+    } else {
+      out[o] = br + (out[o] - br) * k;
+      out[o + 1] = bg + (out[o + 1] - bg) * k;
+      out[o + 2] = bb + (out[o + 2] - bb) * k;
     }
   }
 }

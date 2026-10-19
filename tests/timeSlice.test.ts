@@ -10,6 +10,7 @@ import {
   pivotSegment3D,
   frameProgress,
   keyframeFromPlane,
+  lerpAngle,
   planeFromKeyframe,
   sliceAt,
   sliceTimeRange,
@@ -237,5 +238,34 @@ describe('pivot line', () => {
     const n = [Math.cos(70 * Math.PI / 180) * Math.sin(15 * Math.PI / 180), Math.cos(70 * Math.PI / 180) * Math.cos(15 * Math.PI / 180), Math.sin(70 * Math.PI / 180)];
     for (const p of seg) expect(n[0] * p[0] + n[1] * p[1] + n[2] * p[2]).toBeCloseTo(0.05);
     expect(seg[0][2]).toBeCloseTo(seg[1][2]);
+  });
+});
+
+describe('azimuth interpolation', () => {
+  const turn = (a: number, b: number): SliceAnimation => ({
+    start: { time: 0, span: 0.2, azimuth: a },
+    end: { time: 1, span: 0.2, azimuth: b },
+    easing: 'linear',
+    fit: false,
+    pivot: 0.5,
+  });
+
+  it('takes the short way around the +/-180 wrap', () => {
+    expect(Math.abs(sliceAt(turn(-170, 170), 0.5).azimuth)).toBeCloseTo(180);
+    expect(sliceAt(turn(-170, 170), 0.25).azimuth).toBeCloseTo(-175);
+    expect(sliceAt(turn(170, -170), 0.25).azimuth).toBeCloseTo(175);
+  });
+
+  it('is unchanged for turns shorter than 180 degrees', () => {
+    expect(sliceAt(turn(-40, 60), 0.5).azimuth).toBeCloseTo(10);
+  });
+
+  it('keeps the end points', () => {
+    expect(sliceAt(turn(-170, 170), 0).azimuth).toBeCloseTo(-170);
+    expect(sliceAt(turn(-170, 170), 1).azimuth).toBeCloseTo(170);
+  });
+
+  it('lerpAngle wraps into [-180, 180]', () => {
+    expect(lerpAngle(170, -170, 0.75)).toBeCloseTo(-175);
   });
 });

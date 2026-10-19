@@ -2,13 +2,13 @@
  * Time-slice export panel.
  *
  * Animates the slice plane from a start keyframe to an end keyframe and
- * renders every position as one output frame. The preview runs on the
+ * renders every position as one output frame. The full-size preview runs on the
  * viewer's volume; the export re-decodes the original video or images at
  * the chosen output resolution.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Film, ImageDown, Pause, Play, X } from 'lucide-react';
+import { Eye, Film, ImageDown, Pause, Play, X } from 'lucide-react';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -43,6 +43,8 @@ import {
 import type { QualityId } from '@/export/presets';
 import { probeSource, ExportAbortedError } from '@/export/videoSource';
 import type { ClipSource } from '@/ingest/source';
+import { hexToRgb, makeKeepFn } from '@/render/colorKey';
+import type { ColorKey } from '@/render/colorKey';
 import type { SourceInfo } from '@/export/videoSource';
 import {
   canPickDirectory,
@@ -55,7 +57,7 @@ import {
 } from '@/export/encoders';
 import type { FrameSink } from '@/export/encoders';
 import { exportAnimation, exportStill } from '@/export/exportTimeSlice';
-import type { ExportProgress, ExportSettings } from '@/export/exportTimeSlice';
+import type { ExportProgress, ExportSettings, MatteOutput } from '@/export/exportTimeSlice';
 import { KeyframeEditor } from './KeyframeEditor';
 import { NumberSlider, Section, SelectField } from './fields';
 
@@ -71,6 +73,16 @@ const PHASE_LABEL: Record<ExportProgress['phase'], string> = {
   render: 'Rendering',
   finalize: 'Finishing file',
 };
+
+/** Grey checkerboard that marks transparent areas in the preview. */
+function drawCheckerboard(ctx: CanvasRenderingContext2D, w: number, h: number) {
+  const cell = Math.max(6, Math.round(Math.max(w, h) / 48));
+  ctx.fillStyle = '#bbb';
+  ctx.fillRect(0, 0, w, h);
+  ctx.fillStyle = '#888';
+  for (let y = 0; y < h; y += cell)
+    for (let x = (y / cell) % 2 ? cell : 0; x < w; x += 2 * cell) ctx.fillRect(x, y, cell, cell);
+}
 
 /** Above this much decoded source data, warn about memory. */
 const MEMORY_WARNING_BYTES = 8 * 1024 ** 3;
@@ -125,11 +137,15 @@ export interface ExportPanelProps {
   previewHost: HTMLElement | null;
   /** Keep the panel mounted but out of view, so its settings survive. */
   hidden?: boolean;
+  /** The viewer's colour key, optionally applied to the preview and export. */
+  colorKey: ColorKey;
+  /** Switch the main view to the full-size time-slice preview. */
+  onShowPreview: () => void;
   onClose: () => void;
 }
 
 export function ExportPanel(props: ExportPanelProps) {
-  const { source, volume, half, plane, onApplyPlane, pivot, previewHost, hidden = false } = props;
+  const { source, volume, half, plane, onApplyPlane, pivot, previewHost, hidden = false, colorKey } = props;
 
   // --- source --------------------------------------------------------------
   const [info, setInfo] = useState<SourceInfo | null>(null);
@@ -141,7 +157,27 @@ export function ExportPanel(props: ExportPanelProps) {
   const anim = useMemo(() => ({ ...animBase, pivot }), [animBase, pivot]);
   const [edge, setEdge] = useState<EdgeMode>('hold');
   const [blend, setBlend] = useState(true);
-  const render: RenderOptions = useMemo(() => ({ edge, blend }), [edge, blend]);
+  // Optional colour key on the output (uses the Colour key panel's settings).
+  const [keyExport, setKeyExport] = useState(false);
+  const [keyTarget, setKeyTarget] = useState<'background' | 'transparent'>('background');
+  const [keyBackground, setKeyBackground] = useState('#000000');
+  const [keyMatte, setKeyMatte] = useState(false);
+  const keyActive = keyExport && colorKey.enabled;
+  const keyFor = useCallback(
+    (allowTransparent: boolean) => {
+      const keep = keyActive ? makeKeepFn(colorKey) : null;
+      if (!keep) return null;
+      const [r, g, b] = hexToRgb(keyBackground);
+      return {
+        keep,
+        background: [Math.round(r * 255), Math.round(g * 255), Math.round(b * 255)] as [number, number, number],
+        transparent: allowTransparent && keyTarget === 'transparent',
+      };
+    },
+    [keyActive, colorKey, keyBackground, keyTarget],
+  );
+  // The preview shows transparency over a checkerboard; MP4 cannot store it.
+  const render: RenderOptions = useMemo(() => ({ edge, blend, key: keyFor(true) }), [edge, blend, keyFor]);
 
   // --- output --------------------------------------------------------------
   const [format, setFormat] = useState<Format>(hasVideoEncoder() ? 'mp4' : 'png');
@@ -156,7 +192,6 @@ export function ExportPanel(props: ExportPanelProps) {
   const [playing, setPlaying] = useState(false);
   const [sync3d, setSync3d] = useState(false);
   const [showPivot, setShowPivot] = useState(true);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
   const bigCanvasRef = useRef<HTMLCanvasElement>(null);
   // Bumped when the browser restores a lost canvas context, to force a redraw.
   const [canvasEpoch, setCanvasEpoch] = useState(0);
@@ -211,8 +246,8 @@ export function ExportPanel(props: ExportPanelProps) {
 
   // Render once, then copy into the panel canvas and, if shown, the large one.
   useEffect(() => {
-    const canvases = [canvasRef.current, bigCanvasRef.current].filter((c): c is HTMLCanvasElement => !!c);
-    if (!canvases.length) return;
+    const canvases = [bigCanvasRef.current].filter((c): c is HTMLCanvasElement => !!c);
+    if (!canvases.length) return; // nothing on screen: skip the render
     const img = new ImageData(stack.width, stack.height);
     renderTimeSlice(stack, slice, render, img.data);
     for (const canvas of canvases) {
@@ -224,13 +259,21 @@ export function ExportPanel(props: ExportPanelProps) {
       // frame, which is cheaper without a GPU round trip.
       const ctx = canvas.getContext('2d', { willReadFrequently: true });
       if (!ctx) continue;
-      ctx.putImageData(img, 0, 0);
+      if (render.key?.transparent) {
+        // Show keyed-out pixels over a checkerboard drawn inside the image only.
+        drawCheckerboard(ctx, stack.width, stack.height);
+        const tmp = new OffscreenCanvas(stack.width, stack.height);
+        tmp.getContext('2d')?.putImageData(img, 0, 0);
+        ctx.drawImage(tmp, 0, 0);
+      } else {
+        ctx.putImageData(img, 0, 0);
+      }
       if (showPivot) drawPivotLine(ctx, stack.width, stack.height, slice.azimuth, pivot);
     }
   }, [stack, slice, render, canvasEpoch, previewHost, showPivot, pivot]);
 
   useEffect(() => {
-    const canvases = [canvasRef.current, bigCanvasRef.current].filter((c): c is HTMLCanvasElement => !!c);
+    const canvases = [bigCanvasRef.current].filter((c): c is HTMLCanvasElement => !!c);
     const restored = () => setCanvasEpoch((e) => e + 1);
     for (const c of canvases) c.addEventListener('contextrestored', restored);
     return () => {
@@ -299,9 +342,16 @@ export function ExportPanel(props: ExportPanelProps) {
   );
 
   // --- export --------------------------------------------------------------
-  const settings = (): ExportSettings | null =>
+  const settings = (allowTransparent: boolean): ExportSettings | null =>
     info && size
-      ? { anim, width: size.width, height: size.height, frameCount, sourceCount, render }
+      ? {
+          anim,
+          width: size.width,
+          height: size.height,
+          frameCount,
+          sourceCount,
+          render: { edge, blend, key: keyFor(allowTransparent) },
+        }
       : null;
 
   const runJob = async (work: (signal: AbortSignal) => Promise<string>) => {
@@ -328,8 +378,9 @@ export function ExportPanel(props: ExportPanelProps) {
   };
 
   const handleExport = async () => {
-    const s = settings();
+    const s = settings(format === 'png');
     if (!source || !info || !s) return;
+    const withMatte = format === 'mp4' && keyActive && keyMatte;
     const prefix = `${source.name}_timeslice`;
     // The folder picker needs the click's user activation, so ask first.
     let dir: FileSystemDirectoryHandle | null = null;
@@ -343,9 +394,18 @@ export function ExportPanel(props: ExportPanelProps) {
     await runJob(async (signal) => {
       let sink: FrameSink;
       let filename: string;
+      let matte: MatteOutput | null = null;
+      const base = `${prefix}_${s.width}x${s.height}_${fps}fps`;
       if (format === 'mp4') {
         sink = await createMp4Sink({ width: s.width, height: s.height, fps, quality });
-        filename = `${prefix}_${s.width}x${s.height}_${fps}fps.mp4`;
+        filename = `${base}.mp4`;
+        if (withMatte) {
+          const [r, g, b] = hexToRgb(keyBackground);
+          matte = {
+            sink: await createMp4Sink({ width: s.width, height: s.height, fps, quality }),
+            background: [Math.round(r * 255), Math.round(g * 255), Math.round(b * 255)],
+          };
+        }
       } else if (dir) {
         sink = createPngFolderSink(dir, prefix, s.width, s.height);
         filename = '';
@@ -353,17 +413,25 @@ export function ExportPanel(props: ExportPanelProps) {
         sink = createPngZipSink(prefix, s.width, s.height);
         filename = `${prefix}_${s.width}x${s.height}_png.zip`;
       }
-      const blob = await exportAnimation(source, info, s, sink, { signal, onProgress: setJob });
+      const { blob, matte: matteBlob } = await exportAnimation(source, info, s, sink, { signal, onProgress: setJob }, matte);
       if (blob) {
         saveBlob(blob, filename);
-        return `Saved ${filename}${sink.label ? ` (${sink.label})` : ''}`;
+        const codec = sink.label ? ` (${sink.label})` : '';
+        if (matteBlob) {
+          const matteName = `${base}_matte.mp4`;
+          // A short pause keeps browsers from dropping the second download.
+          await new Promise((r) => setTimeout(r, 400));
+          saveBlob(matteBlob, matteName);
+          return `Saved ${filename} and ${matteName}${codec}`;
+        }
+        return `Saved ${filename}${codec}`;
       }
       return `Wrote ${s.frameCount} PNG frames to "${dir?.name ?? 'folder'}"`;
     });
   };
 
   const handleStill = async () => {
-    const s = settings();
+    const s = settings(true);
     if (!source || !info || !s) return;
     const index = Math.round(progress * (frameCount - 1));
     await runJob(async (signal) => {
@@ -456,12 +524,9 @@ export function ExportPanel(props: ExportPanelProps) {
 
         <div className="flex-1 overflow-y-auto">
           <Section title="Preview">
-            <canvas
-              ref={canvasRef}
-              id="export-preview"
-              className="w-full rounded-md border bg-black"
-              style={{ aspectRatio: `${stack.width} / ${stack.height}`, imageRendering: 'auto' }}
-            />
+            <Button id="export-show-preview" size="sm" variant="outline" onClick={props.onShowPreview}>
+              <Eye /> Open the full-size preview
+            </Button>
             <div className="flex items-center gap-2">
               <Button
                 size="icon-sm"
@@ -487,7 +552,7 @@ export function ExportPanel(props: ExportPanelProps) {
             <div className="flex items-center gap-2">
               <Checkbox id="show-pivot" checked={showPivot} onCheckedChange={(c) => setShowPivot(c === true)} />
               <Label htmlFor="show-pivot" className="text-xs">
-                Show the tilt pivot line (preview only)
+                Show the tilt pivot line on the preview
               </Label>
             </div>
             <div className="flex items-center gap-2">
@@ -563,6 +628,72 @@ export function ExportPanel(props: ExportPanelProps) {
                 </span>
               </Label>
             </div>
+          </Section>
+
+          <Section title="Colour key">
+            <div className="flex items-start gap-2">
+              <Checkbox
+                id="key-export"
+                checked={keyExport}
+                disabled={!colorKey.enabled}
+                onCheckedChange={(c) => setKeyExport(c === true)}
+              />
+              <Label htmlFor="key-export" className="flex-col items-start gap-0.5 text-xs">
+                Apply the colour key to the preview and export
+                <span className="font-normal text-muted-foreground">
+                  {colorKey.enabled
+                    ? 'Uses the settings from the Colour key panel.'
+                    : 'Turn the key on in the Colour key panel first.'}
+                </span>
+              </Label>
+            </div>
+            {keyActive && (
+              <div className="flex items-end gap-2">
+                <div className="flex-1">
+                  <SelectField<'background' | 'transparent'>
+                    id="key-target"
+                    label="Keyed pixels become"
+                    value={keyTarget}
+                    options={[
+                      { value: 'background', label: 'Background colour' },
+                      { value: 'transparent', label: 'Transparent (PNG only)' },
+                    ]}
+                    onValueChange={setKeyTarget}
+                  />
+                </div>
+                <label
+                  className="relative size-8 shrink-0 cursor-pointer overflow-hidden rounded-md border"
+                  style={{ background: keyBackground }}
+                  title="Background colour (also used for MP4 when Transparent is chosen)"
+                >
+                  <input
+                    id="key-background"
+                    type="color"
+                    value={keyBackground}
+                    onChange={(e) => setKeyBackground(e.target.value)}
+                    className="absolute inset-0 cursor-pointer opacity-0"
+                  />
+                </label>
+              </div>
+            )}
+            {keyActive && keyTarget === 'transparent' && format === 'mp4' && !keyMatte && (
+              <p className="text-[11px] text-amber-400">
+                MP4 cannot store transparency; the video uses the background colour. Stills and PNG sequences stay
+                transparent. Add a matte video below to get the transparency back in your editor.
+              </p>
+            )}
+            {keyActive && format === 'mp4' && (
+              <div className="flex items-start gap-2">
+                <Checkbox id="key-matte" checked={keyMatte} onCheckedChange={(c) => setKeyMatte(c === true)} />
+                <Label htmlFor="key-matte" className="flex-col items-start gap-0.5 text-xs">
+                  Also export a matte video
+                  <span className="font-normal text-muted-foreground">
+                    A second MP4 (_matte): white where the image is kept, black where it is keyed. Use it as a luma
+                    matte in After Effects, Premiere, DaVinci or Cinema 4D.
+                  </span>
+                </Label>
+              </div>
+            )}
           </Section>
 
           <Section title="Output">

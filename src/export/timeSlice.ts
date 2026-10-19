@@ -90,6 +90,16 @@ const DEG = Math.PI / 180;
 
 const lerp = (a: number, b: number, t: number): number => a + (b - a) * t;
 
+/**
+ * Interpolate between two angles in degrees along the shorter way around the
+ * circle, so -170 -> 170 sweeps 20 degrees through +/-180 rather than 340
+ * degrees through 0. The result is wrapped into [-180, 180].
+ */
+export function lerpAngle(a: number, b: number, t: number): number {
+  const delta = ((((b - a + 180) % 360) + 360) % 360) - 180;
+  return wrapDegrees(a + delta * t);
+}
+
 export function ease(kind: Easing, t: number): number {
   const x = Math.min(1, Math.max(0, t));
   switch (kind) {
@@ -140,7 +150,7 @@ export function sliceAt(anim: SliceAnimation, p: number): SliceParams {
   const t = Math.min(1, Math.max(0, p));
   const shape = ease(anim.easing, t);
   const span = lerp(anim.start.span, anim.end.span, shape);
-  const azimuth = lerp(anim.start.azimuth, anim.end.azimuth, shape);
+  const azimuth = lerpAngle(anim.start.azimuth, anim.end.azimuth, shape);
   const linearTime = lerp(anim.start.time, anim.end.time, t);
   const pivotTime = anim.fit ? fitPivotTime(linearTime, span, anim.pivot) : linearTime;
   return { time: pivotTime + pivotShift(span, anim.pivot), span, azimuth };

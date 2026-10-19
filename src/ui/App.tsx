@@ -797,7 +797,7 @@ export function App() {
           <header className="flex items-center justify-between border-b px-4 py-3">
             <div>
               <h2 className="text-sm font-semibold tracking-tight">Colour key</h2>
-              <p className="text-[11px] text-muted-foreground">Viewer only; exports are never keyed.</p>
+              <p className="text-[11px] text-muted-foreground">Keys the 3D view; the export can use it too.</p>
             </div>
             <Button size="icon-sm" variant="ghost" onClick={() => setRightPanel('none')} aria-label="Close colour key">
               <X />
@@ -830,6 +830,8 @@ export function App() {
             onApplyPlane={applyPlane}
             pivot={pivot}
             previewHost={viewMode === 'preview' ? previewHost : null}
+            colorKey={colorKey}
+            onShowPreview={() => setViewMode('preview')}
             onClose={() => {
               setRightPanel('none');
               setViewMode('3d');

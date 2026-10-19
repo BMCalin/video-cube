@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { DEFAULT_COLOR_KEY, hexToRgb, keyKeep, keyMatch, rgbToHex, rgbToHsv } from '../src/render/colorKey';
+import { DEFAULT_COLOR_KEY, hexToRgb, keyKeep, keyMatch, makeKeepFn, rgbToHex, rgbToHsv } from '../src/render/colorKey';
 import type { ColorKey } from '../src/render/colorKey';
 
 const sky: ColorKey = { ...DEFAULT_COLOR_KEY, enabled: true, color: [0.35, 0.6, 0.9] };
@@ -45,5 +45,18 @@ describe('colour key', () => {
 describe('hex helpers', () => {
   it('round-trip', () => {
     expect(rgbToHex(hexToRgb('#5a99e6'))).toBe('#5a99e6');
+  });
+});
+
+describe('makeKeepFn', () => {
+  it('matches keyKeep on 8-bit colours', () => {
+    const f = makeKeepFn(sky)!;
+    for (const c of [[89, 153, 230], [242, 242, 247], [230, 128, 51], [10, 10, 10], [60, 120, 200]] as const) {
+      expect(f(c[0], c[1], c[2])).toBeCloseTo(keyKeep(sky, [c[0] / 255, c[1] / 255, c[2] / 255]), 6);
+    }
+  });
+
+  it('is null when the key is off', () => {
+    expect(makeKeepFn({ ...sky, enabled: false })).toBeNull();
   });
 });

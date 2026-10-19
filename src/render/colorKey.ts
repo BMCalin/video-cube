@@ -96,3 +96,49 @@ export function hexToRgb(hex: string): [number, number, number] {
   if (!m) return [0, 0, 0];
   return [parseInt(m[1], 16) / 255, parseInt(m[2], 16) / 255, parseInt(m[3], 16) / 255];
 }
+
+/**
+ * Fast per-pixel version of keyKeep for 8-bit RGB (used by the export).
+ * Returns null when the key is disabled. Same maths as keyMatch/keyKeep.
+ */
+export function makeKeepFn(key: ColorKey): ((r: number, g: number, b: number) => number) | null {
+  if (!key.enabled) return null;
+  const [kh, ks, kv] = rgbToHsv(...key.color);
+  const ih = 1 / Math.max(1e-3, key.hueTol / 360);
+  const is = 1 / Math.max(1e-3, key.satTol);
+  const iv = 1 / Math.max(1e-3, key.valTol);
+  const soft = Math.max(1e-3, key.softness);
+  const e0 = 1 - soft;
+  const span = 2 * soft;
+  const hide = key.mode === 'hide';
+  return (r8, g8, b8) => {
+    const r = r8 / 255;
+    const g = g8 / 255;
+    const b = b8 / 255;
+    const max = r > g ? (r > b ? r : b) : g > b ? g : b;
+    const min = r < g ? (r < b ? r : b) : g < b ? g : b;
+    const d = max - min;
+    let h = 0;
+    if (d > 1e-6) {
+      if (max === r) h = ((g - b) / d) % 6;
+      else if (max === g) h = (b - r) / d + 2;
+      else h = (r - g) / d + 4;
+      h /= 6;
+      if (h < 0) h += 1;
+    }
+    const s = max > 1e-6 ? d / max : 0;
+    let dh = Math.abs(h - kh);
+    if (dh > 0.5) dh = 1 - dh;
+    const sw = Math.min(s, ks) * 5;
+    dh *= sw < 1 ? sw : 1;
+    let dist = dh * ih;
+    const ds = Math.abs(s - ks) * is;
+    if (ds > dist) dist = ds;
+    const dv = Math.abs(max - kv) * iv;
+    if (dv > dist) dist = dv;
+    let t = (dist - e0) / span;
+    t = t < 0 ? 0 : t > 1 ? 1 : t;
+    const match = 1 - t * t * (3 - 2 * t);
+    return hide ? 1 - match : match;
+  };
+}
